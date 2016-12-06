@@ -26,27 +26,39 @@ class DecisionTree {
   def gini(dataSet: DataSet[Tuple4[Boolean, Boolean, Boolean, Int]], column: Int): Double ={
     val counts = dataSet
       .map(x=>(x._1, x._2, x._3, 1))
-      .groupBy(column)
+      .groupBy(column, 2)
       .sum(3)
 
-    val sum = counts.sum(3).first(1).collect().map(_._4).head
+    val count = dataSet.count().toDouble
+    val sum = dataSet
+      .map(x=>(x._1, x._2, x._3, 1)).groupBy(column).sum(3)
 
-    val giniTemp= counts
-      .map(x => (x._3, x._4.toDouble/sum))
-      .map(x => (x._1, x._2*x._2))
-      .sum(1)
-      .map(_._2)
-      .collect().head
-    val gini = 1 - giniTemp
-    gini
+    val res = counts.join(sum)
+      .where(column)
+      .equalTo(column)
+
+    val giniTemp= res
+          .map(x => (x._1._3, x._1._4.toDouble/x._2._4, x._2._4))
+          .map(x => (x._1, x._2*x._2, x._3))
+          .groupBy(0)
+          .sum(1)
+          .map(x => (x._1, (1 - x._2)* (x._3.toDouble/count)))
+
+    val gini2= giniTemp
+          .sum(1)
+          .map(_._2)
+          .collect().head
+
+    gini2
   }
 
-  def purity(dataSet: DataSet[Tuple4[Boolean, Boolean, Boolean, Int]]): Double ={
-    val pur = dataSet.map(x => (x._3, 1))
+  def purity(dataSet: DataSet[Tuple4[Boolean, Boolean, Boolean, Int]], id: Int): Double ={
+    val pur = dataSet.filter(_._4 == id)
+                        .map(x => (x._3, 1))
                         .groupBy(0)
                         .sum(1)
-                        .collect().head._2
-    val count = dataSet.count()
+                        .collect().head._2.toDouble
+    val count = dataSet.filter(_._4 == id).count().toDouble
     pur/count
   }
 
@@ -99,17 +111,34 @@ class DecisionTree {
       val tempNode = leaf.remove(0)
       var min = 1.0
       var minCol = -1
+      val id = tempNode.id
+      //check if the node should be a leaf
+      val nodePur = purity(dataWithID, id)
 
-      //check is the node should be a leaf
-      val nodePur = purity(dataWithID)
       if(nodePur == 0 | nodePur == 1){
-        //TODO create leaf
+        // create the leaf
+        val id = tempNode.id
+        //        val label = dataWithID.filter( _._4 == id).first(1).collect()(0)._3
+        // choose the class that appears more as the class of the leaf
+        val label = dataWithID
+          .filter(_._4 == id)
+          .map(x => (x._1, x._2, x._3, x._4, 1))
+          .groupBy(2)
+          .reduce((x, y) => (x._1, x._2, x._3, x._4, x._5 + y._5))
+          .reduce((x, y) => if (x._5 > y._5) {
+            x
+          } else {
+            y
+          })
+          .collect().head._3
+        tempNode.classification = label
+
       } else {
         // compute purity for cutting at each column
         for (i <- 0 to 1) {
           val id = tempNode.id
           val pur = gini(dataWithID.filter(_._4 == id), i)
-          purs(i) = pur
+//          purs(i) = pur
           if (min > pur) {
             min = pur
             minCol = i
@@ -118,9 +147,8 @@ class DecisionTree {
 
         val id = tempNode.id
         minPur = min
-        println("min", min)
         // create the new nodes if we haven't reached a leaf
-        if (min > 0.0) {
+//        if (min > 0.0) {
           minCount += 1
           val c1 = new Node(-1, List(), true, tempNode.id * 2, true, minPur)
           val c2 = new Node(-1, List(), false, tempNode.id * 2 + 1, false, minPur)
@@ -131,28 +159,6 @@ class DecisionTree {
           leaf += c1
           leaf += c2
           tempNode.column = minCol
-
-
-        } else {
-          zeroCount += 1
-
-          // create the leaf
-          val id = tempNode.id
-          //        val label = dataWithID.filter( _._4 == id).first(1).collect()(0)._3
-          // choose the class that appears more as the class of the leaf
-          val label = dataWithID
-            .filter(_._4 == id)
-            .map(x => (x._1, x._2, x._3, x._4, 1))
-            .groupBy(2)
-            .reduce((x, y) => (x._1, x._2, x._3, x._4, x._5 + y._5))
-            .reduce((x, y) => if (x._5 > y._5) {
-              x
-            } else {
-              y
-            })
-            .collect().head._3
-          tempNode.classification = label
-        }
 
         // modify the id's of the datapoints
         dataWithID = dataWithID.map(x => if (x._4 == id) {
@@ -166,7 +172,6 @@ class DecisionTree {
         })
       }
     }
-    purs.foreach(x => println("pur", x))
     dataWithID.print()
     println("mincount", minCount, minPur, zeroCount)
     n
