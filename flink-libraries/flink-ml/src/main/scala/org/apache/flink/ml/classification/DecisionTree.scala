@@ -23,20 +23,28 @@ import scala.collection.mutable.ListBuffer
 
 
 class DecisionTree {
+  // gini(parent) = 1 - Sum pi * pi
+  // gini(children) = fi * gini(i)
   def gini(dataSet: DataSet[Tuple4[Boolean, Boolean, Boolean, Int]], column: Int): Double ={
+    // count the number of records by the splitting of the column and the class label
     val counts = dataSet
       .map(x=>(x._1, x._2, x._3, 1))
       .groupBy(column, 2)
       .sum(3)
 
+    // the number of all the records
     val count = dataSet.count().toDouble
+
+    // compute for each value from the column where we want to make the split the number of records
     val sum = dataSet
       .map(x=>(x._1, x._2, x._3, 1)).groupBy(column).sum(3)
 
+    //pair each count by the column and class label with their count by the column
     val res = counts.join(sum)
       .where(column)
       .equalTo(column)
 
+    // compute the gini for each child and weigh them by the nimber of records in the child node
     val giniTemp= res
           .map(x => (x._1._3, x._1._4.toDouble/x._2._4, x._2._4))
           .map(x => (x._1, x._2*x._2, x._3))
@@ -44,6 +52,7 @@ class DecisionTree {
           .sum(1)
           .map(x => (x._1, (1 - x._2)* (x._3.toDouble/count)))
 
+    // sum and collect the gini of the children
     val gini2= giniTemp
           .sum(1)
           .map(_._2)
