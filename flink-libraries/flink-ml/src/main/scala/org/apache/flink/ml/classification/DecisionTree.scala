@@ -102,21 +102,97 @@ class DecisionTree {
     }
     tempNode.classification
   }
+  def growTreeIter(dataSet: DataSet[Tuple3[Boolean, Boolean, Boolean]], columns: Int): Node ={
+    val columns = 2
+    val data = Array(Tuple3(1, List[Boolean](true, true), true), Tuple3(2, List[Boolean](true, false), true),
+      Tuple3(2, List[Boolean](true, false), true),
+      Tuple3(1, List[Boolean](false, false), false), Tuple3(1, List[Boolean](true, true), false),
+      Tuple3(3, List[Boolean](false, true), false), Tuple3(3, List[Boolean](false, false), false))
+    val env = ExecutionEnvironment.getExecutionEnvironment
+    val init = env.fromCollection(data)
+    //    val sol = Array(Tuple2(8, 0))
+    //    val sol = Array(new Node(-1, List(), false, 1, false, -1.0))
+    val sol = Array(Tuple2(0, new Node(-1, List(), false, 1, false, -1.0)))
+    val initSol = env.fromCollection(sol)
+    val iter = initSol.iterateDelta(init, 1, Array(0)){
+      (solution, workSet) =>
 
-  def growTree(dataSet: DataSet[Tuple3[Boolean, Boolean, Boolean]]): Node ={
+        val purWorkSet = workSet.map(x => (x._2(0), x._2(1), x._3.asInstanceOf[Boolean], x._1))
+        val zeroes = purWorkSet
+          .filter(_._3 != true)
+          .distinct(3)
+          .map(x => (x._4, 0))
+
+        val countTemp = purWorkSet
+          .filter(_._3 == true)
+          .map(x => (x._4, 1))
+          .union(zeroes)
+          .groupBy(0)
+          .sum(1)
+          .map(x => (x._1, x._2))
+
+        //the number of datapoints by node
+        val sumTemp = purWorkSet
+          .map(x => (x._4, 1))
+          .groupBy(0)
+          .sum(1)
+          .map(x => (x._1, x._2))
+
+        // the purity (number of true labels/number of datapoints) by node
+        val purity = countTemp
+          .join(sumTemp)
+          .where(0)
+          .equalTo(0)
+          .map(x => (x._1._1, x._1._2.toDouble/x._2._2.toDouble))
+
+        // the new items in the solution set: the datapoints that are in pure nodes
+        val delta = purWorkSet
+          .join(purity)
+          .where(3)
+          .equalTo(0)
+          .filter(x => x._2._2 == 0 || x._2._2 == 1)
+          .map(x => Tuple2(x._1._4, new Node(-1, List(), false, x._1._4, false, -1.0)))
+
+        // the new workSet is the datapoints that are not in pure nodes
+        val newWorkTemp = purWorkSet
+          .join(purity)
+          .where(3)
+          .equalTo(0)
+          .filter(x => x._2._2 > 0 && x._2._2 < 1)
+          .map(x => (x._1._4, List(x._1._1, x._1._2), x._1._3))
+
+
+        val newWorkSet = newWorkTemp.map{
+          x =>
+            val label = x._3
+            x._2.map{
+              case y: Boolean =>
+                if (y && label) List[Tuple2[Int, Int]]((1, 0), (0, 0))
+                if (y && !label) List[Tuple2[Int, Int]]((0, 1), (0, 0))
+                if (!y && label) List[Tuple2[Int, Int]]((0, 0), (1, 0))
+                if (!y && !label) List[Tuple2[Int, Int]]((0, 0), (0, 1))
+            }.asInstanceOf[List[List[Tuple2[Int, Int]]]]
+        }.reduce((x,y) => x.zip(y).map(x => x._1.zip(x._2).map(x => (x._1._1 + x._2._1, x._1._2 + x._2._2))))
+
+        //        val newWorkSet = workSet
+
+        (delta, newWorkSet)
+
+    }
+
+    iter.print()
+    iter.first(1).collect().head._2
+
+  }
+  def growTree(dataSet: DataSet[Tuple3[Boolean, Boolean, Boolean]], columns: Int): Node ={
     // every datapoint starts in the node with id=1
     var dataWithID = dataSet.map(x => Tuple4(x._1, x._2, x._3, 1))
     var leaf = ListBuffer[Node]()
     val n = new Node(-1, List(), false, 1, false, -1.0)
     leaf += n
-    var count=0
-    var minCount=0
     var minPur=0.0
-    var zeroCount = 0
-    val purs = new Array[Double](2)
     // create new leaves until we still have inner nodes in the tree
     while(leaf.nonEmpty) {
-      count+=1
       val tempNode = leaf.remove(0)
       var min = 1.0
       var minCol = -1
@@ -127,7 +203,6 @@ class DecisionTree {
       if(nodePur == 0 | nodePur == 1){
         // create the leaf
         val id = tempNode.id
-        //        val label = dataWithID.filter( _._4 == id).first(1).collect()(0)._3
         // choose the class that appears more as the class of the leaf
         val label = dataWithID
           .filter(_._4 == id)
@@ -143,11 +218,12 @@ class DecisionTree {
         tempNode.classification = label
 
       } else {
+
         // compute purity for cutting at each column
-        for (i <- 0 to 1) {
+        for (i <- 0 to columns - 1) {
           val id = tempNode.id
-          val pur = gini(dataWithID.filter(_._4 == id), i)
-//          purs(i) = pur
+          val idIndex = columns + 1
+          val pur = gini(dataWithID.filter(_.productElement(idIndex) == id), i)
           if (min > pur) {
             min = pur
             minCol = i
@@ -157,10 +233,8 @@ class DecisionTree {
         val id = tempNode.id
         minPur = min
         // create the new nodes if we haven't reached a leaf
-//        if (min > 0.0) {
-          minCount += 1
-          val c1 = new Node(-1, List(), true, tempNode.id * 2, true, minPur)
-          val c2 = new Node(-1, List(), false, tempNode.id * 2 + 1, false, minPur)
+          val c1 = new Node(-1, List(), true, tempNode.id * 2, true, min)
+          val c2 = new Node(-1, List(), false, tempNode.id * 2 + 1, false, min)
 
           var ctemp = Array() :+ c1
           ctemp = ctemp :+ c2
@@ -169,8 +243,9 @@ class DecisionTree {
           leaf += c2
           tempNode.column = minCol
 
+        val idIndex = columns + 1
         // modify the id's of the datapoints
-        dataWithID = dataWithID.map(x => if (x._4 == id) {
+        dataWithID = dataWithID.map(x => if (x.productElement(idIndex) == id) {
           if (x.productElement(minCol) == false) {
             (x._1, x._2, x._3, x._4 * 2 + 1)
           } else {
@@ -182,7 +257,6 @@ class DecisionTree {
       }
     }
     dataWithID.print()
-    println("mincount", minCount, minPur, zeroCount)
     n
   }
 
